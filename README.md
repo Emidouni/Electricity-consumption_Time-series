@@ -1,3 +1,5 @@
+Introduction
+
 This project involves a comprehensive time series analysis of power consumption data, covering multiple forecasting models and methodologies. The dataset consists of timestamps, power consumption (kW), and temperature (C°) data, with an interval of 15 minutes between observations over a period of 52 days. The analysis includes data preprocessing, handling missing values, splitting the data into training, testing, and unseen datasets, and applying various forecasting models.
 
 Key Steps in the Analysis:
