@@ -1,0 +1,432 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+```{r}
+# Load the necessary libraries
+library(readxl)
+library(forecast)
+library(forecast)
+library(ggplot2)
+library(imputeTS)
+library(trend)
+library(writexl)
+library(dplyr)
+
+```
+
+
+```{r}
+#Load data 
+# Read the Excel file '2023-11-Elec-train.xlsx'
+data <- read_excel('C:/Users/eyami/2023-11-Elec-train.xlsx')
+print(data)
+```
+
+```{r}
+# Remove the first 92 rows from the data
+data <- data[-(1:91), ]
+
+# Convert the 'Timestamp' column to POSIXct format for time series analysis
+data$Timestamp <- as.POSIXct(data$Timestamp, format="%m/%d/%Y %H:%M",tz="UTC")
+
+# Plot power consumption over time
+plot(data$Timestamp, data$`Power (kW)`, type="l", col="blue",
+     xlab="Time", ylab="Power (kW)", main="Power over Time")
+
+# Plot temperature over time
+plot(data$Timestamp, data$`Temp (C°)`, type="l", col="red",
+     xlab="Time", ylab="Temperature (C°)", main="Temperature over Time")
+
+
+```
+##The first day of data was removed because the observations did not start exactly at midnight (00:00). This step was necessary to ensure that each day in the time series starts at the correct time, which is important for maintaining the accuracy and consistency of the time series analysis
+
+
+```{r}
+# Define the cutoff date
+cutoff_date <- as.POSIXct("2010-02-21 00:00:00", format="%Y-%m-%d",tz="UTC")
+# Filter data before the cutoff date
+data_before_cutoff <- data[data$Timestamp <cutoff_date, ]
+# Convert the Timestamp to a Date object to group by day
+data_before_cutoff$Date <- as.Date(data_before_cutoff$Timestamp)
+
+# Get unique dates before the cutoff
+unique_dates <- unique(data_before_cutoff$Date)
+# Determine the number of dates for training (80% of the unique dates)
+train_dates_count <- floor(0.8 * length(unique_dates))
+
+# Split the unique dates into training and testing sets
+train_dates <- unique_dates[1:train_dates_count]
+test_dates <- unique_dates[(train_dates_count + 1):length(unique_dates)]
+print(length(unique_dates))
+print(length(train_dates))
+print(length(test_dates))
+
+# Create the training and testing sets based on these dates
+train_data <- data_before_cutoff[data_before_cutoff$Date %in% train_dates, ]
+test_data <- data_before_cutoff[data_before_cutoff$Date %in% test_dates, ]
+print(test_data)
+
+# Filter data after the cutoff date for the unseen dataset
+unseen_data <- data[data$Timestamp >= cutoff_date, ]
+print(unseen_data)
+```
+
+
+```{r}
+# Display rows in the training set where Power (kW) is 0
+null_rows_train <- train_data[train_data$`Power (kW)` == 0, ]
+print(null_rows_train)
+# Display rows in the test set where Power (kW) is 0
+null_rows_test <- test_data[test_data$`Power (kW)` == 0, ]
+print(null_rows_test)
+```
+
+## I identified and replaced zero values in the power consumption data with NaN in the test_data, then performed imputation to fill in these gaps. This process was important to ensure the accuracy of the time series analysis by preventing misleading patterns caused by erroneous zeros
+```{r}
+# Replace null values (0) with NaN in the Power (kW) column
+test_data$`Power (kW)`[test_data$`Power (kW)` == 0] <- NaN
+
+# Replace NaN values using moving average imputation
+test_data$`Power (kW)` <- na_ma(test_data$`Power (kW)`)
+
+```
+
+```{r}
+# Check for NaN values in the test set
+has_nan_test <- any(is.nan(test_data$`Power (kW)`))
+print(paste("The test set contains NaN values:", has_nan_test))
+
+# Display rows with NaN values
+nan_rows_test <- test_data[is.nan(test_data$`Power (kW)`), ]
+print(nan_rows_test)
+```
+
+```{r}
+
+# Set the frequency of the time series (96 periods per day, representing 15-minute intervals)
+frequency <- 96
+
+# Define the start of the time series as the 2nd day of the year, which corresponds to January 2, 2010
+start <- c(1, 1)
+
+# Create the time series for power consumption
+power_ts_train <- ts(train_data$`Power (kW)`, frequency = frequency, start = start)
+
+# Create the time series for temperature
+temp_ts_train <- ts(train_data$`Temp (C°)`, frequency = frequency, start = start)
+
+# Visualize the power consumption time series with a clean and minimalistic plot
+autoplot(power_ts_train) +
+  ggtitle("Power Consumption Time Series Train ") +
+  xlab("Time") + 
+  ylab("Power (kW)") +
+  theme_minimal()
+
+# Visualize the temperature time series with a clean and minimalistic plot
+autoplot(temp_ts_train) +
+  ggtitle("Temperature Time Series Train") +
+  xlab("Time") + 
+  ylab("Temperature (C°)") +
+  theme_minimal()
+
+```
+
+```{r}
+# Set the frequency of the time series (96 periods per day, representing 15-minute intervals)
+frequency <- 96
+
+# Define the start of the time series based on the first date in the test dataset
+start_test <- c(40, 1)  # February 18, 2010
+
+# Create the time series for power consumption (test data)
+power_ts_test <- ts(test_data$`Power (kW)`, frequency = frequency, start = start_test)
+
+# Create the time series for temperature (test data)
+temp_ts_test <- ts(test_data$`Temp (C°)`, frequency = frequency, start = start_test)
+
+# Visualize the power consumption time series for test data
+autoplot(power_ts_test) +
+  ggtitle("Power Consumption Time Series (Test Data)") +
+  xlab("Time") + 
+  ylab("Power (kW)") +
+  theme_minimal()
+
+# Visualize the temperature time series for test data
+autoplot(temp_ts_test) +
+  ggtitle("Temperature Time Series (Test Data)") +
+  xlab("Time") + 
+  ylab("Temperature (C°)") +
+  theme_minimal()
+```
+
+
+```{r}
+Box.test(power_ts_train, lag = 10, type = "Box-Pierce")
+Box.test(power_ts_test, lag = 10, type = "Box-Pierce")
+```
+## The time series exhibits significant autocorrelations over the first 10 lags. This indicates that the series has a non-random temporal structure and that there are likely significant dependencies between observations over time
+
+```{r}
+# Decomposition of the power time series
+components_power_train <- decompose(power_ts_train)
+# Visualize the decomposition
+autoplot(components_power_train) +
+  ggtitle("Decomposition of Power Consumption Time Series train")
+
+```
+##The decomposition of the time series shows a relatively stable trend, a strong seasonal component related to regular cycles, and residuals that suggest anomalies or events not captured by the trend and seasonality.
+
+##Forecast without temperature
+##Additive seasonal Holt-Winters
+```{r}
+# Initialize the number of folds and the list to store RMSE values
+folds <- 4
+segments <- list()
+rmse_values <- numeric(folds)
+
+# Total number of observations per fold
+observations_per_fold <- 960
+
+# Segment the time series into 4 equal parts and convert them into `ts` objects
+for (i in 1:folds) {
+    start_idx <- ((i - 1) * observations_per_fold) + 1
+    end_idx <- i * observations_per_fold
+    segments[[i]] <- ts(power_ts_train[start_idx:end_idx], frequency = frequency, start = c(1, 1))
+}
+
+# Loop through each segment for cross-validation
+for (i in 1:folds) {
+    # Use the other segments for training, exclude the current segment i
+    train_segments <- segments[-i]
+    val_segment <- segments[[i]]
+    
+    # Combine the training segments into one time series
+    train_data_c <- do.call(c, train_segments)
+    
+    # Convert the combined data into a time series object
+    train_data_ts <- ts(train_data_c, frequency = frequency)
+    
+    # Fit the Holt-Winters model on the training data
+    model <- HoltWinters(train_data_ts) 
+    
+    # Predict on the validation set (h = 960 because each segment has 960 observations)
+    predictions <- forecast(model, h = observations_per_fold)$mean
+    
+    # Convert the validation set and predictions to numeric vectors if necessary
+    val_set <- as.numeric(val_segment)
+    predictions <- as.numeric(predictions)
+    
+    # Calculate the RMSE between the predictions and the actual values of the validation set
+    rmse_values[i] <- sqrt(mean((val_set - predictions)^2))
+}
+
+# Calculate the average RMSE across all folds
+mean_rmse <- mean(rmse_values)
+print(mean_rmse)
+
+```
+
+```{r}
+# Fit the Holt-Winters model on the entire training data
+final_model <- HoltWinters(power_ts_train)
+
+# Predict on the test dataset
+test_predictions <- forecast(final_model, h = length(power_ts_test))$mean
+
+# Convert the test set and predictions to numeric vectors if necessary
+test_set <- as.numeric(power_ts_test)
+test_predictions <- as.numeric(test_predictions)
+
+# Calculate the RMSE between the predictions and the actual values of the test set
+test_rmse <- sqrt(mean((test_set - test_predictions)^2))
+
+# Print the RMSE for the test data
+print(test_rmse)
+```
+# Multiplicative seasonal Holt-Winters
+```{r}
+# Segment the time series into 4 equal parts and convert them into `ts` objects
+for (i in 1:folds) {
+    start_idx <- ((i - 1) * observations_per_fold) + 1
+    end_idx <- i * observations_per_fold
+    segments[[i]] <- ts(power_ts_train[start_idx:end_idx], frequency = frequency, start = c(1, 1))
+}
+
+# Loop through each segment for cross-validation
+for (i in 1:folds) {
+    # Use the other segments for training, exclude the current segment i
+    train_segments <- segments[-i]
+    val_segment <- segments[[i]]
+    
+    # Combine the training segments into one time series
+    train_data_c <- do.call(c, train_segments)
+    
+    # Convert the combined data into a time series object
+    train_data_ts <- ts(train_data_c, frequency = frequency)
+    
+    # Fit the Holt-Winters model on the training data
+    model <- HoltWinters(train_data_ts,alpha=NULL,beta=NULL,gamma=NULL,seasonal = "multi") 
+    
+    # Predict on the validation set (h = 960 because each segment has 960 observations)
+    predictions <- forecast(model, h = observations_per_fold)$mean
+    
+    # Convert the validation set and predictions to numeric vectors if necessary
+    val_set <- as.numeric(val_segment)
+    predictions <- as.numeric(predictions)
+    
+    # Calculate the RMSE between the predictions and the actual values of the validation set
+    rmse_values[i] <- sqrt(mean((val_set - predictions)^2))
+}
+
+# Calculate the average RMSE across all folds
+mean_rmse <- mean(rmse_values)
+print(mean_rmse)
+```
+```{r}
+# Fit the Holt-Winters model on the entire training data
+final_model <- HoltWinters(power_ts_train,alpha=NULL,beta=NULL,gamma=NULL,seasonal = "multi")
+
+# Predict on the test dataset
+test_predictions <- forecast(final_model, h = length(power_ts_test))$mean
+
+# Convert the test set and predictions to numeric vectors if necessary
+test_set <- as.numeric(power_ts_test)
+test_predictions <- as.numeric(test_predictions)
+
+# Calculate the RMSE between the predictions and the actual values of the test set
+test_rmse <- sqrt(mean((test_set - test_predictions)^2))
+
+# Print the RMSE for the test data
+print(test_rmse)
+```
+# Auto ARIMA
+```{r}
+
+# Segment the time series into 4 equal parts and convert them into `ts` objects
+for (i in 1:folds) {
+    start_idx <- ((i - 1) * observations_per_fold) + 1
+    end_idx <- i * observations_per_fold
+    segments[[i]] <- ts(power_ts_train[start_idx:end_idx], frequency = frequency, start = c(1, 1))
+}
+
+# Loop through each segment for cross-validation
+for (i in 1:folds) {
+    # Use the other segments for training, exclude the current segment i
+    train_segments <- segments[-i]
+    val_segment <- segments[[i]]
+    
+    # Combine the training segments into one time series
+    train_data_c <- do.call(c, train_segments)
+    
+    # Convert the combined data into a time series object
+    train_data_ts <- ts(train_data_c, frequency = frequency)
+    
+    # Fit the ARIMA model on the training data
+    model <- auto.arima(train_data_ts)
+    
+    # Predict on the validation set (h = 960 because each segment has 960 observations)
+    predictions <- forecast(model, h = observations_per_fold)$mean
+    
+    # Convert the validation set and predictions to numeric vectors if necessary
+    val_set <- as.numeric(val_segment)
+    predictions <- as.numeric(predictions)
+    
+    # Calculate the RMSE between the predictions and the actual values of the validation set
+    rmse_values[i] <- sqrt(mean((val_set - predictions)^2))
+}
+
+# Calculate the average RMSE across all folds
+mean_rmse <- mean(rmse_values)
+print(mean_rmse)
+```
+
+```{r}
+# Fit the ARIMA model on the entire training data
+final_model_arima <- auto.arima(power_ts_train)
+
+# Predict on the test dataset
+test_predictions_arima <- forecast(final_model_arima, h = length(power_ts_test))$mean
+
+# Convert the test set and predictions to numeric vectors if necessary
+test_set <- as.numeric(power_ts_test)
+test_predictions_arima <- as.numeric(test_predictions_arima)
+
+# Calculate the RMSE between the predictions and the actual values of the test set
+test_rmse_arima <- sqrt(mean((test_set - test_predictions_arima)^2))
+
+# Print the RMSE for the test data
+print(test_rmse_arima)
+```
+##Forecast with temperature
+##Auto ARIMA
+```{r}
+# Fit the ARIMA model on the entire training data
+final_model_arima <- auto.arima(power_ts_train,xreg = temp_ts_train)
+
+# Predict on the test dataset
+test_predictions_arima <- forecast(final_model_arima,xreg = temp_ts_test, h = length(power_ts_test))$mean
+
+# Convert the test set and predictions to numeric vectors if necessary
+test_set <- as.numeric(power_ts_test)
+test_predictions_arima <- as.numeric(test_predictions_arima)
+
+# Calculate the RMSE between the predictions and the actual values of the test set
+test_rmse_arima <- sqrt(mean((test_set - test_predictions_arima)^2))
+
+# Print the RMSE for the test data
+print(test_rmse_arima)
+```
+
+```{r}
+# Convert the temperature of the unseen data into a time series
+unseen_temp_ts <- ts(unseen_data$`Temp (C°)`, frequency = frequency, start = c(1, 1))
+
+# Predict the "Power (kW)" values for the unseen data using the trained ARIMA model
+unseen_power_predictions <- forecast(final_model_arima, xreg = unseen_temp_ts, h = length(unseen_temp_ts))$mean
+
+# Add the predictions to the "Power (kW)" column of the unseen data
+unseen_data$`Power (kW)` <- unseen_power_predictions
+
+# Convert the Timestamps in 'unseen_data' to character strings
+# This ensures that the format is consistent with the other datasets
+unseen_data$Timestamp <- format(unseen_data$Timestamp, format="%Y-%m-%d %H:%M:%S", tz="UTC")
+
+print(unseen_data)
+
+```
+```{r}
+
+# Standardize the format of the Timestamps
+# Convert the 'Timestamp' column in both 'train_data' and 'test_data' to POSIXct format 
+# and then back to a standardized string format ("%Y-%m-%d %H:%M:%S")
+train_data$Timestamp <- format(as.POSIXct(train_data$Timestamp, format="%Y-%m-%d %H:%M:%S"), format="%Y-%m-%d %H:%M:%S")
+test_data$Timestamp <- format(as.POSIXct(test_data$Timestamp, format="%Y-%m-%d %H:%M:%S"), format="%Y-%m-%d %H:%M:%S")
+
+# Convert the Timestamps of 'train_data' and 'test_data' to character strings
+# to ensure they match the format of 'unseen_data'
+train_data$Timestamp <- as.character(train_data$Timestamp)
+test_data$Timestamp <- as.character(test_data$Timestamp)
+
+# Remove the 'Date' column
+train_data <- train_data %>% select(-Date)
+test_data <- test_data %>% select(-Date)
+
+# Concatenate the three datasets vertically (train_data, test_data, and unseen_data)
+final_data <- rbind(train_data, test_data, unseen_data)
+
+```
+
+```{r}
+# Concatenate the three datasets (train_data, test_data, unseen_data) vertically into a single dataset
+final_data <- rbind(train_data, test_data, unseen_data)
+print(final_data)
+
+# Write the combined dataset to an Excel file named "forecast.xlsx"
+write_xlsx(final_data, path = "C:/Users/eyami/forecast.xlsx")
+
+# Print a confirmation message to notify the user that the file has been successfully saved
+cat("The Excel file has been updated and saved as 'forecast.xlsx'.\n")
+
+```
